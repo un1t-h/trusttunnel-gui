@@ -1,0 +1,8 @@
+# сборка
+bin/
+obj/
+
+# локальные файлы
+*.user
+.vs/
+.test-instance.env
