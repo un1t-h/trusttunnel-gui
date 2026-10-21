@@ -12,6 +12,7 @@ namespace TrustTunnelGui
         public string Description;
         public string[] Entries;
         public string[] Executables; // имена exe (без .exe), по которым приложение узнаётся
+        public string[] Networks;    // все сети сервиса; если заданы, в режиме «только выбранное» его можно выделить маршрутами
     }
 
     /// <summary>Исключение-приложение, собранное по его сетевым подключениям.</summary>
@@ -42,6 +43,8 @@ namespace TrustTunnelGui
                 Id = ClaudeId, Name = "Claude / Anthropic", Description = "claude.ai, приложение Claude, Claude Code, API Anthropic",
                 Executables = new[] { "claude" },
                 Entries = new[] { "claude.ai", "claude.com", "anthropic.com", "claudeusercontent.com" },
+                // собственные сети Anthropic (AS399358): claude.ai, api.anthropic.com
+                Networks = new[] { "160.79.104.0/23", "2607:6bc0::/48" },
             },
             new ExclusionPreset
             {
@@ -63,6 +66,10 @@ namespace TrustTunnelGui
                 Entries = new[] { "telegram.org", "t.me", "telegram.me", "telesco.pe", "tdesktop.com", "telegra.ph",
                     "91.108.4.0/22", "91.108.8.0/22", "91.108.12.0/22", "91.108.16.0/22", "91.108.56.0/22",
                     "149.154.160.0/20", "95.161.64.0/20" },
+                // https://core.telegram.org/resources/cidr.txt
+                Networks = new[] { "91.105.192.0/23", "91.108.4.0/22", "91.108.8.0/22", "91.108.12.0/22", "91.108.16.0/22",
+                    "91.108.20.0/22", "91.108.56.0/22", "95.161.64.0/20", "149.154.160.0/20", "185.76.151.0/24",
+                    "2001:67c:4e8::/48", "2001:b28:f23c::/48", "2001:b28:f23d::/48", "2001:b28:f23f::/48", "2a0a:f280::/32" },
             },
             new ExclusionPreset
             {
@@ -176,6 +183,72 @@ namespace TrustTunnelGui
         {
             int m10 = n % 10, m100 = n % 100;
             return m10 == 1 && m100 != 11 ? one : m10 >= 2 && m10 <= 4 && (m100 < 12 || m100 > 14) ? few : many;
+        }
+    }
+
+    /// <summary>
+    /// Разделение маршрутами для режима «через VPN только выбранное». Если всё выбранное известно по IP,
+    /// в туннель заводятся только эти сети, а остальной трафик в него не попадает вовсе — как у WireGuard/AmneziaVPN.
+    /// Тогда клиенту не нужно самому открывать прямые соединения, и zapret/GoodbyeDPI можно не останавливать.
+    /// </summary>
+    public static class SplitRouting
+    {
+        public static List<string> Networks(Profile p)
+        {
+            string blocker;
+            return Networks(p, out blocker);
+        }
+
+        /// <summary>Сети для туннеля или null, если нужен режим по доменам; blocker — что мешает (для подсказки).</summary>
+        public static List<string> Networks(Profile p, out string blocker)
+        {
+            blocker = null;
+            if (!p.IsTun || p.VpnMode != "selective") return null;
+            if (p.IncludedRoutes.Count > 0) { blocker = "в профиле заданы свои маршруты в туннель"; return null; }
+            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var res = new List<string>();
+            Action<IEnumerable<string>> add = list => { foreach (var n in list) if (seen.Add(n)) res.Add(n); };
+            foreach (var id in p.ExclusionPresets)
+            {
+                var preset = ExclusionCatalog.Find(id);
+                if (preset == null) continue;
+                if (preset.Networks == null) { blocker = preset.Name; return null; }
+                add(preset.Networks);
+            }
+            foreach (var e in p.Exclusions)
+            {
+                var cidr = ToCidr(e);
+                if (cidr == null) { blocker = e; return null; }
+                add(new[] { cidr });
+            }
+            foreach (var app in p.ExclusionApps)
+            {
+                if (!app.Enabled) continue;
+                var preset = ExclusionCatalog.ForExecutable(app.Exe);
+                if (preset != null && preset.Networks != null) { add(preset.Networks); continue; }
+                var nets = app.Entries.Select(ToCidr).ToList();
+                if (nets.Count == 0 || nets.Contains(null)) { blocker = app.Name; return null; }
+                add(nets);
+            }
+            if (res.Count == 0) { blocker = "ничего не выбрано"; return null; }
+            return res;
+        }
+
+        /// <summary>IP-адрес или подсеть в виде CIDR (1.2.3.4 → 1.2.3.4/32); для доменов, масок и портов — null.</summary>
+        public static string ToCidr(string entry)
+        {
+            var s = (entry ?? "").Trim();
+            string addr = s, bits = null;
+            int slash = s.IndexOf('/');
+            if (slash > 0) { addr = s.Substring(0, slash); bits = s.Substring(slash + 1); }
+            System.Net.IPAddress ip;
+            if (!System.Net.IPAddress.TryParse(addr, out ip)) return null;
+            // IPAddress.TryParse принимает и «10» или «1.2» — требуем полную запись адреса
+            bool v6 = ip.AddressFamily == System.Net.Sockets.AddressFamily.InterNetworkV6;
+            if (!v6 && addr.Count(c => c == '.') != 3) return null;
+            int max = v6 ? 128 : 32, n = max;
+            if (bits != null && (!int.TryParse(bits, out n) || n < 0 || n > max)) return null;
+            return addr + "/" + n;
         }
     }
 

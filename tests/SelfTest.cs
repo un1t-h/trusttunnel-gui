@@ -204,6 +204,40 @@ mtu_size = 1_350
             Eq(p.AntiDpi, true, "flat anti_dpi");
         }
 
+        // --- разделение маршрутами в режиме «только выбранное» ---
+        {
+            var p = new Profile { Hostname = "h", Username = "u", Password = "p", VpnMode = "selective", KillSwitch = true, ChangeSystemDns = true };
+            p.Addresses.Add("1.2.3.4:443");
+            p.ExclusionPresets.Add(ExclusionCatalog.ClaudeId);
+            p.Exclusions.Add("8.8.8.8");
+            p.Exclusions.Add("10.20.0.0/16");
+            var nets = SplitRouting.Networks(p);
+            Check(nets != null && nets.Contains("160.79.104.0/23") && nets.Contains("2607:6bc0::/48"), "split: сети Claude");
+            Check(nets != null && nets.Contains("8.8.8.8/32") && nets.Contains("10.20.0.0/16"), "split: свои IP → CIDR");
+            var t = TomlParser.Parse(ConfigBuilder.Build(p));
+            Eq(t["vpn_mode"], "general", "split: vpn_mode general");
+            Eq(t["killswitch_enabled"], false, "split: kill switch выключен");
+            Eq(((List<object>)t["exclusions"]).Count, 0, "split: exclusions пусты");
+            Eq(t["listener.tun.change_system_dns"], false, "split: системный DNS не меняется");
+            Check(((List<object>)t["listener.tun.included_routes"]).Contains("160.79.104.0/23")
+                  && !((List<object>)t["listener.tun.included_routes"]).Contains("0.0.0.0/0"), "split: included_routes только сети");
+
+            p.ExclusionPresets.Add("spotify");
+            string blocker;
+            Check(SplitRouting.Networks(p, out blocker) == null && blocker == "Spotify", "split: Spotify → режим по доменам");
+            var t2 = TomlParser.Parse(ConfigBuilder.Build(p));
+            Eq(t2["vpn_mode"], "selective", "domains: vpn_mode selective");
+            Eq(t2["killswitch_enabled"], true, "domains: kill switch как в профиле");
+            p.ExclusionPresets.Remove("spotify");
+            p.Exclusions.Add("example.com");
+            Check(SplitRouting.Networks(p) == null, "split: свой домен → режим по доменам");
+            p.Exclusions.Remove("example.com");
+            p.VpnMode = "general";
+            Check(SplitRouting.Networks(p) == null, "split: только в режиме «только выбранное»");
+            Eq(SplitRouting.ToCidr("2001:db8::1"), "2001:db8::1/128", "cidr: IPv6");
+            Check(SplitRouting.ToCidr("10") == null && SplitRouting.ToCidr("*:443") == null && SplitRouting.ToCidr("1.2.3.4/33") == null, "cidr: мусор отбрасывается");
+        }
+
         // --- исключения: наборы, приложения, свои записи ---
         {
             var p = new Profile { Hostname = "h", Username = "u", Password = "p" };

@@ -10,7 +10,7 @@ namespace TrustTunnelGui
     static class Program
     {
         public const string AppName = "TrustTunnel GUI";
-        public const string AppVersion = "1.2.2";
+        public const string AppVersion = "1.3.0";
         const string MutexName = "TrustTunnelGui_SingleInstance";
         const string PipeName = "TrustTunnelGui_Pipe";
 

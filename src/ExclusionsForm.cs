@@ -16,7 +16,7 @@ namespace TrustTunnelGui
         readonly List<string> home;
 
         FlatButton modeExcept, modeOnly, lanDirect, lanVpn;
-        Label lblModeHint, lblLanHint;
+        Label lblModeHint, lblLanHint, lblSplitHint;
         CheckBox chkKeepHome;
         readonly Dictionary<string, FlatButton> chips = new Dictionary<string, FlatButton>();
         FlowLayoutPanel appsBox;
@@ -43,6 +43,7 @@ namespace TrustTunnelGui
             modeOnly.Click += (s, e) => SetMode(true);
             g.Controls.Add(Row(modeExcept, modeOnly));
             lblModeHint = Hint(g, "");
+            lblSplitHint = Hint(g, "");
             var claudeOnly = new FlatButton { Kind = ButtonKind.Ghost, Glyph = Glyphs.Shield, Text = "Быстрая настройка: через VPN только Claude и Anthropic",
                 Margin = new Padding(Ui.S(2), Ui.S(4), 0, 0) };
             claudeOnly.Size = claudeOnly.GetPreferredSize(Size.Empty);
@@ -66,6 +67,7 @@ namespace TrustTunnelGui
                     b.Size = b.GetPreferredSize(Size.Empty);
                     if (b.Checked) { if (!p.ExclusionPresets.Contains(pr.Id)) p.ExclusionPresets.Add(pr.Id); }
                     else p.ExclusionPresets.Remove(pr.Id);
+                    UpdateSplitHint();
                 };
                 b.Size = b.GetPreferredSize(Size.Empty);
                 tips.SetToolTip(b, preset.Description + " · " + preset.Entries.Length + " " +
@@ -206,6 +208,21 @@ namespace TrustTunnelGui
             lblModeHint.Text = only
                 ? "Через VPN пойдут только выбранные сервисы, приложения и адреса, остальное — напрямую."
                 : "Весь трафик идёт через VPN, а выбранные сервисы, приложения и адреса — напрямую, мимо VPN.";
+            UpdateSplitHint();
+        }
+
+        /// <summary>Как будет разделён трафик в режиме «только выбранное»: маршрутами (zapret работает) или по доменам.</summary>
+        void UpdateSplitHint()
+        {
+            if (lblSplitHint == null) return;
+            if (p.VpnMode != "selective" || !p.IsTun) { lblSplitHint.Text = ""; lblSplitHint.Visible = false; return; }
+            string blocker;
+            var nets = SplitRouting.Networks(p, out blocker);
+            lblSplitHint.Visible = true;
+            lblSplitHint.Text = nets != null
+                ? "✔ Всё выбранное известно по IP-адресам: в туннель пойдут только эти сети, остальной трафик его не коснётся. zapret и GoodbyeDPI продолжат работать."
+                : "Разделение по доменам: «" + blocker + "» нельзя выделить по IP-адресам, поэтому весь трафик пройдёт через клиент, а zapret на время VPN будет приостановлен. " +
+                  "Маршрутами работают Claude / Anthropic, Telegram и свои IP-адреса и подсети.";
         }
 
         /// <summary>Сценарий «через VPN только Claude»: выборочный режим и единственный набор Claude / Anthropic.</summary>
@@ -224,6 +241,7 @@ namespace TrustTunnelGui
             RefreshApps();
             lblModeHint.Text = "Через VPN пойдут только Claude (сайт и приложение), Claude Code и API Anthropic. " +
                                "Всё остальное — напрямую, как без VPN." + (p.Exclusions.Count > 0 ? " Свои адреса из списка ниже тоже пойдут через VPN — уберите лишние." : "");
+            UpdateSplitHint();
         }
 
         void SetLan(bool viaVpn)
@@ -249,6 +267,7 @@ namespace TrustTunnelGui
             lstOwn.Items.Clear();
             foreach (var e in p.Exclusions) lstOwn.Items.Add(e);
             lstOwn.EndUpdate();
+            UpdateSplitHint();
         }
 
         void AddOwn(string text)
@@ -317,7 +336,7 @@ namespace TrustTunnelGui
                     Text = a.Name + "  ·  " + a.Entries.Count + " " + ExclusionCatalog.Plural(a.Entries.Count, "адрес", "адреса", "адресов"),
                     Margin = new Padding(Ui.S(3), Ui.S(7), Ui.S(8), 0),
                 };
-                chk.CheckedChanged += (s, e) => a.Enabled = chk.Checked;
+                chk.CheckedChanged += (s, e) => { a.Enabled = chk.Checked; UpdateSplitHint(); };
                 var del = new FlatButton { Kind = ButtonKind.Ghost, Glyph = Glyphs.Delete, IconOnly = true, Text = "Удалить", Size = new Size(Ui.S(30), Ui.S(30)) };
                 del.Click += (s, e) => { p.ExclusionApps.Remove(a); RefreshApps(); };
                 var show = new FlatButton { Kind = ButtonKind.Ghost, Text = "адреса", Font = Theme.UiFont(9f) };
@@ -329,6 +348,7 @@ namespace TrustTunnelGui
             }
             appsBox.ResumeLayout(true);
             Theme.Apply(appsBox);
+            UpdateSplitHint();
         }
 
         void AddApp()
@@ -341,6 +361,7 @@ namespace TrustTunnelGui
                     if (!p.ExclusionPresets.Contains(f.PresetId)) p.ExclusionPresets.Add(f.PresetId);
                     FlatButton chip;
                     if (chips.TryGetValue(f.PresetId, out chip)) { chip.Checked = true; chip.Glyph = Glyphs.Check; chip.Size = chip.GetPreferredSize(Size.Empty); }
+                    UpdateSplitHint();
                 }
                 else if (f.App != null)
                 {

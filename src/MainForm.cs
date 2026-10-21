@@ -676,6 +676,8 @@ namespace TrustTunnelGui
         void PauseDpiBypassIfNeeded(Profile p)
         {
             if (!p.IsTun || HasPausedDpi) return;
+            // При разделении маршрутами туннель не видит остальной трафик — обход DPI ему не мешает.
+            if (SplitRouting.Networks(p) != null) return;
             // Приостанавливаем и в режиме «через VPN только выбранное»: WinDivert отправляет перехваченные
             // пакеты заново по таблице маршрутов, и прямые соединения клиента на 80/443 уходят обратно в туннель.
             bool selective = p.VpnMode == "selective";
@@ -1224,7 +1226,8 @@ namespace TrustTunnelGui
                 bnDpi.Visible = true;
                 bnDpi.Set(BannerKind.Info, "zapret приостановлен на время VPN — внутри туннеля он ломает Discord и YouTube.", "Почему?");
             }
-            else if (vpn.IsRunning && vpn.ActiveProfile != null && vpn.ActiveProfile.IsTun && !data.Settings.PauseDpiBypass)
+            else if (vpn.IsRunning && vpn.ActiveProfile != null && vpn.ActiveProfile.IsTun && !data.Settings.PauseDpiBypass &&
+                     SplitRouting.Networks(vpn.ActiveProfile) == null)
             {
                 DpiBypass.Detected d = null;
                 try { d = DpiBypass.Detect(); } catch { }

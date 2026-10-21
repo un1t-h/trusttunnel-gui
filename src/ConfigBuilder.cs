@@ -33,15 +33,21 @@ namespace TrustTunnelGui
         /// <param name="autoBoundIf">индекс физического адаптера для прямых соединений, если в профиле он не задан вручную</param>
         public static string Build(Profile p, IEnumerable<string> homeSubnets, string autoBoundIf)
         {
+            // «Только выбранное», где всё выбранное известно по IP: в туннель заводим только эти сети,
+            // остальной трафик идёт напрямую силами Windows (см. SplitRouting).
+            var routeNets = SplitRouting.Networks(p);
+            bool byRoutes = routeNets != null;
             var sb = new StringBuilder();
             sb.Append("# Сгенерировано TrustTunnel GUI. Профиль: ").Append(p.DisplayName.Replace('\n', ' ')).Append('\n');
+            if (byRoutes) sb.Append("# Разделение маршрутами: через VPN только сети выбранных сервисов\n");
             Line(sb, "loglevel", TomlWriter.Str(string.IsNullOrEmpty(p.LogLevel) ? "info" : p.LogLevel));
-            Line(sb, "vpn_mode", TomlWriter.Str(p.VpnMode == "selective" ? "selective" : "general"));
-            Line(sb, "killswitch_enabled", TomlWriter.Bool(p.KillSwitch));
+            Line(sb, "vpn_mode", TomlWriter.Str(p.VpnMode == "selective" && !byRoutes ? "selective" : "general"));
+            // kill switch пропускает только трафик туннеля — при разделении маршрутами он заблокировал бы всё остальное
+            Line(sb, "killswitch_enabled", TomlWriter.Bool(p.KillSwitch && !byRoutes));
             var ports = ParsePorts(p.KillSwitchAllowPorts);
             if (ports.Count > 0) Line(sb, "killswitch_allow_ports", "[" + string.Join(", ", ports) + "]");
             if (!p.PostQuantum) Line(sb, "post_quantum_group_enabled", "false");
-            Line(sb, "exclusions", TomlWriter.Arr(ExclusionCatalog.Effective(p)));
+            Line(sb, "exclusions", TomlWriter.Arr(byRoutes ? new List<string>() : ExclusionCatalog.Effective(p)));
             if (!string.IsNullOrWhiteSpace(p.ExtraToml))
                 sb.Append(p.ExtraToml.Replace("\r\n", "\n").TrimEnd()).Append('\n');
 
@@ -73,10 +79,12 @@ namespace TrustTunnelGui
                 // и всё, что идёт мимо VPN, перестаёт открываться (TrustTunnel/TrustTunnelClient#56).
                 string boundIf = !string.IsNullOrEmpty(p.BoundIf) ? p.BoundIf : autoBoundIf;
                 if (!string.IsNullOrEmpty(boundIf)) Line(sb, "bound_if", TomlWriter.Str(boundIf));
-                Line(sb, "included_routes", TomlWriter.Arr(p.IncludedRoutes.Count > 0 ? (IEnumerable<string>)p.IncludedRoutes : DefaultIncludedRoutes));
+                Line(sb, "included_routes", TomlWriter.Arr(byRoutes ? routeNets
+                    : p.IncludedRoutes.Count > 0 ? (IEnumerable<string>)p.IncludedRoutes : DefaultIncludedRoutes));
                 Line(sb, "excluded_routes", TomlWriter.Arr(LanRouting.ExcludedRoutes(p, homeSubnets)));
                 Line(sb, "mtu_size", (p.MtuSize > 0 ? p.MtuSize : 1350).ToString(CultureInfo.InvariantCulture));
-                Line(sb, "change_system_dns", TomlWriter.Bool(p.ChangeSystemDns));
+                // при разделении маршрутами DNS остаётся системным (роутер): адрес DNS-прокси клиента вне маршрутов туннеля
+                Line(sb, "change_system_dns", TomlWriter.Bool(p.ChangeSystemDns && !byRoutes));
             }
             else
             {

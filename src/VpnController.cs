@@ -75,6 +75,15 @@ namespace TrustTunnelGui
                 Log(string.IsNullOrEmpty(BoundIf)
                     ? "⚠ Не найден физический сетевой адаптер — прямые соединения (мимо VPN) могут не работать"
                     : "Прямые соединения через адаптер «" + (string.IsNullOrEmpty(profile.BoundIf) && phys != null ? phys.Name : BoundIf) + "» (bound_if = " + BoundIf + ")");
+                if (profile.VpnMode == "selective")
+                {
+                    string blocker;
+                    var nets = SplitRouting.Networks(profile, out blocker);
+                    Log(nets != null
+                        ? "Разделение маршрутами: в туннель идут только сети выбранных сервисов (" + string.Join(", ", nets) + "), остальное — напрямую силами Windows. zapret не мешает."
+                          + (profile.KillSwitch ? " Kill switch в этом режиме не используется." : "")
+                        : "Разделение по доменам (" + blocker + " нельзя выделить по IP-адресам): весь трафик проходит через клиент.");
+                }
             }
 
             var psi = new ProcessStartInfo(exe, "-c \"" + configPath + "\"")
