@@ -207,7 +207,13 @@ namespace TrustTunnelGui
             if (p.IncludedRoutes.Count > 0) { blocker = "в профиле заданы свои маршруты в туннель"; return null; }
             var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             var res = new List<string>();
-            Action<IEnumerable<string>> add = list => { foreach (var n in list) if (seen.Add(n)) res.Add(n); };
+            // IPv6-сети — только если IPv6 пропускается через VPN: иначе соединения к ним уходят в туннель и висят,
+            // пока сервер не ответит таймаутом (на сервере без IPv6-выхода), вместо мгновенного перехода на IPv4.
+            Action<IEnumerable<string>> add = list =>
+            {
+                foreach (var n in list)
+                    if ((p.HasIpv6 || !n.Contains(":")) && seen.Add(n)) res.Add(n);
+            };
             foreach (var id in p.ExclusionPresets)
             {
                 var preset = ExclusionCatalog.Find(id);

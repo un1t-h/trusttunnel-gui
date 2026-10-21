@@ -218,7 +218,13 @@ mtu_size = 1_350
             Eq(t["vpn_mode"], "general", "split: vpn_mode general");
             Eq(t["killswitch_enabled"], false, "split: kill switch выключен");
             Eq(((List<object>)t["exclusions"]).Count, 0, "split: exclusions пусты");
-            Eq(t["listener.tun.change_system_dns"], false, "split: системный DNS не меняется");
+            Eq(t["listener.tun.change_system_dns"], true, "split: DNS клиента (иначе restrict_dns_to блокирует роутер)");
+            p.ChangeSystemDns = false;
+            Eq(TomlParser.Parse(ConfigBuilder.Build(p))["listener.tun.change_system_dns"], true, "split: DNS клиента даже если в профиле выключен");
+            p.ChangeSystemDns = true;
+            p.HasIpv6 = false;
+            Check(!SplitRouting.Networks(p).Contains("2607:6bc0::/48") && SplitRouting.Networks(p).Contains("160.79.104.0/23"), "split: без IPv6 через VPN — только IPv4-сети");
+            p.HasIpv6 = true;
             Check(((List<object>)t["listener.tun.included_routes"]).Contains("160.79.104.0/23")
                   && !((List<object>)t["listener.tun.included_routes"]).Contains("0.0.0.0/0"), "split: included_routes только сети");
 

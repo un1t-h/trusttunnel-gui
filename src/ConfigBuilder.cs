@@ -83,8 +83,9 @@ namespace TrustTunnelGui
                     : p.IncludedRoutes.Count > 0 ? (IEnumerable<string>)p.IncludedRoutes : DefaultIncludedRoutes));
                 Line(sb, "excluded_routes", TomlWriter.Arr(LanRouting.ExcludedRoutes(p, homeSubnets)));
                 Line(sb, "mtu_size", (p.MtuSize > 0 ? p.MtuSize : 1350).ToString(CultureInfo.InvariantCulture));
-                // при разделении маршрутами DNS остаётся системным (роутер): адрес DNS-прокси клиента вне маршрутов туннеля
-                Line(sb, "change_system_dns", TomlWriter.Bool(p.ChangeSystemDns && !byRoutes));
+                // Клиент на Windows всегда ограничивает DNS (порт 53) сетями туннеля и своим DNS-адресом (restrict_dns_to
+                // в os_tunnel_win.cpp). При разделении маршрутами без своего DNS запросы к роутеру были бы заблокированы.
+                Line(sb, "change_system_dns", TomlWriter.Bool(p.ChangeSystemDns || byRoutes));
             }
             else
             {
