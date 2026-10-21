@@ -37,6 +37,7 @@ namespace TrustTunnelGui
         public List<ExclusionApp> ExclusionApps { get; set; } // приложения, собранные по подключениям
         public bool LanViaVpn { get; set; }                   // частные сети (192.168.x.x и т.п.) через VPN
         public bool LanKeepHome { get; set; }                 // …кроме своей текущей локальной сети
+        public bool AutoStart { get; set; }                   // подключаться к этому серверу при входе в Windows
         public bool KillSwitch { get; set; }
         public string KillSwitchAllowPorts { get; set; }
 

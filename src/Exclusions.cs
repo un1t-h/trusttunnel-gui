@@ -33,8 +33,16 @@ namespace TrustTunnelGui
 
     public static class ExclusionCatalog
     {
+        public const string ClaudeId = "claude";
+
         public static readonly ExclusionPreset[] Presets =
         {
+            new ExclusionPreset
+            {
+                Id = ClaudeId, Name = "Claude / Anthropic", Description = "claude.ai, приложение Claude, Claude Code, API Anthropic",
+                Executables = new[] { "claude" },
+                Entries = new[] { "claude.ai", "claude.com", "anthropic.com", "claudeusercontent.com" },
+            },
             new ExclusionPreset
             {
                 Id = "discord", Name = "Discord", Description = "чат, голос, CDN",
@@ -93,6 +101,22 @@ namespace TrustTunnelGui
                 Entries = new[] { "*.ru", "*.xn--p1ai", "*.su" },
             },
         };
+
+        /// <summary>Адрес для проверки, что туннель реально работает: сайт, который точно идёт через VPN.</summary>
+        public static string HealthUrl(Profile p)
+        {
+            if (p.VpnMode != "selective") return "https://www.gstatic.com/generate_204";
+            if (p.ExclusionPresets.Contains(ClaudeId)) return "https://claude.ai/";
+            foreach (var e in Effective(p))
+            {
+                // первый «обычный» домен: не IP, не подсеть, не маска
+                if (e.Contains("*") || e.Contains("/") || e.Contains(":")) continue;
+                System.Net.IPAddress ip;
+                if (System.Net.IPAddress.TryParse(e, out ip)) continue;
+                if (e.Contains(".")) return "https://" + e + "/";
+            }
+            return null;
+        }
 
         public static ExclusionPreset Find(string id)
         {

@@ -240,6 +240,25 @@ mtu_size = 1_350
             Eq(LanRouting.ExcludedRoutes(p, home).Count, 1, "свои маршруты важнее переключателя");
         }
 
+        // --- «только Claude» и адрес проверки связи ---
+        {
+            var p = new Profile();
+            Eq(ExclusionCatalog.HealthUrl(p), "https://www.gstatic.com/generate_204", "health: обычный режим");
+            p.VpnMode = "selective";
+            Eq(ExclusionCatalog.HealthUrl(p), null, "health: выборочный режим без адресов");
+            p.Exclusions.Add("10.0.0.0/8");
+            p.Exclusions.Add("*.corp.lan");
+            p.Exclusions.Add("intranet.example.org");
+            Eq(ExclusionCatalog.HealthUrl(p), "https://intranet.example.org/", "health: первый обычный домен");
+            p.ExclusionPresets.Add(ExclusionCatalog.ClaudeId);
+            Eq(ExclusionCatalog.HealthUrl(p), "https://claude.ai/", "health: набор Claude");
+            var eff = ExclusionCatalog.Effective(p);
+            Check(eff.Contains("claude.ai") && eff.Contains("anthropic.com") && eff.Contains("claude.com"), "Claude: домены в списке");
+            Eq(ExclusionCatalog.ForExecutable("claude.exe").Id, ExclusionCatalog.ClaudeId, "приложение Claude → набор");
+            var t = TomlParser.Parse(ConfigBuilder.Build(p));
+            Eq((string)t["vpn_mode"], "selective", "toml: выборочный режим");
+        }
+
         // --- ошибки ---
         {
             Throws(() => DeepLink.Decode("https://example.com"), "не tt://");

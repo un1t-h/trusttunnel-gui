@@ -43,6 +43,11 @@ namespace TrustTunnelGui
             modeOnly.Click += (s, e) => SetMode(true);
             g.Controls.Add(Row(modeExcept, modeOnly));
             lblModeHint = Hint(g, "");
+            var claudeOnly = new FlatButton { Kind = ButtonKind.Ghost, Glyph = Glyphs.Shield, Text = "Быстрая настройка: через VPN только Claude и Anthropic",
+                Margin = new Padding(Ui.S(2), Ui.S(4), 0, 0) };
+            claudeOnly.Size = claudeOnly.GetPreferredSize(Size.Empty);
+            claudeOnly.Click += (s, e) => ApplyClaudeOnly();
+            g.Controls.Add(claudeOnly);
 
             // ---- сервисы ----
             Header(g, "Сервисы", "Готовые наборы доменов и адресов. Включите нужные — список обновляется вместе с программой.");
@@ -201,6 +206,24 @@ namespace TrustTunnelGui
             lblModeHint.Text = only
                 ? "Через VPN пойдут только выбранные сервисы, приложения и адреса, остальное — напрямую."
                 : "Весь трафик идёт через VPN, а выбранные сервисы, приложения и адреса — напрямую, мимо VPN.";
+        }
+
+        /// <summary>Сценарий «через VPN только Claude»: выборочный режим и единственный набор Claude / Anthropic.</summary>
+        void ApplyClaudeOnly()
+        {
+            SetMode(true);
+            p.ExclusionPresets.Clear();
+            p.ExclusionPresets.Add(ExclusionCatalog.ClaudeId);
+            foreach (var kv in chips)
+            {
+                kv.Value.Checked = kv.Key == ExclusionCatalog.ClaudeId;
+                kv.Value.Glyph = kv.Value.Checked ? Glyphs.Check : null;
+                kv.Value.Size = kv.Value.GetPreferredSize(Size.Empty);
+            }
+            foreach (var a in p.ExclusionApps) a.Enabled = false;
+            RefreshApps();
+            lblModeHint.Text = "Через VPN пойдут только Claude (сайт и приложение), Claude Code и API Anthropic. " +
+                               "Всё остальное — напрямую, как без VPN." + (p.Exclusions.Count > 0 ? " Свои адреса из списка ниже тоже пойдут через VPN — уберите лишние." : "");
         }
 
         void SetLan(bool viaVpn)

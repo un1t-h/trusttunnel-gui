@@ -4,6 +4,7 @@ using System.Diagnostics;
 using System.Drawing;
 using System.IO;
 using System.Linq;
+using System.Security;
 using System.Security.Principal;
 using System.Text;
 using System.Windows.Forms;
@@ -41,6 +42,12 @@ namespace TrustTunnelGui
         Banner bnClient, bnAdmin, bnRoute, bnInstall;
         FlatButton btnLog, btnEdit, btnExcl;
         Banner bnDpi;
+        CheckBox chkAutoStart;
+        bool syncingAutoStart;
+        // сторож соединения: периодическая проверка, что сайт за туннелем открывается
+        DateTime nextHealthCheck = DateTime.MinValue;
+        int healthFails;
+        bool healthBusy;
         bool switching; // идёт переключение/переподключение профиля — не возвращать обход DPI в паузе
         Label lblNoServers;
         TextBox txtLog;
@@ -87,6 +94,8 @@ namespace TrustTunnelGui
 
             Theme.Changed += ApplyTheme;
             SystemEvents.UserPreferenceChanged += OnSystemPreferenceChanged;
+            SystemEvents.PowerModeChanged += OnPowerModeChanged;
+            System.Net.NetworkInformation.NetworkChange.NetworkAvailabilityChanged += OnNetworkAvailabilityChanged;
             vpn.UnexpectedExit += OnUnexpectedExit;
             timer.Tick += (s, e) => OnTick();
             timer.Start();
@@ -251,7 +260,10 @@ namespace TrustTunnelGui
             btnExcl = new FlatButton { Kind = ButtonKind.Ghost, Glyph = Glyphs.Filter, Font = Theme.UiFont(9.5f) };
             btnExcl.Click += (s, e) => OpenExclusions(vpn.IsRunning ? vpn.ActiveProfile : Selected);
             tips.SetToolTip(btnExcl, "Что идёт мимо VPN: сервисы, приложения, сайты, локальные сети");
-            mainArea.Controls.AddRange(new Control[] { power, lblState, lblSub, btnExcl, tileIp, tileTime, tileDown, tileUp });
+            chkAutoStart = new CheckBox { AutoSize = true, Text = "Запускать с Windows и сразу подключаться к этому серверу", Cursor = Cursors.Hand };
+            chkAutoStart.CheckedChanged += (s, e) => { if (!syncingAutoStart) OnAutoStartToggled(); };
+            tips.SetToolTip(chkAutoStart, "Программа стартует при входе в Windows, сама подключится и будет держать соединение");
+            mainArea.Controls.AddRange(new Control[] { power, lblState, lblSub, btnExcl, chkAutoStart, tileIp, tileTime, tileDown, tileUp });
             mainArea.Layout += (s, e) => LayoutMain();
 
             emptyPanel = BuildEmptyState();
@@ -421,7 +433,7 @@ namespace TrustTunnelGui
             int tileW = cols == 4 ? Math.Min(Ui.S(185), fourW) : Math.Min(Ui.S(220), (w - gap - Ui.S(48)) / 2);
             int rows = 4 / cols;
             int tilesH = rows * tileH + (rows - 1) * gap;
-            int textH = Ui.S(6) + lblState.Height + lblSub.Height + (btnExcl.Visible ? Ui.S(36) : 0);
+            int textH = Ui.S(6) + lblState.Height + lblSub.Height + (btnExcl.Visible ? Ui.S(36) + Ui.S(28) : 0);
             // Кнопка подстраивается под высоту; если места совсем мало (открыт журнал) — прячем плитки.
             int pb = Math.Min(Ui.S(200), h - textH - Ui.S(18) - tilesH - Ui.S(24));
             bool showTiles = pb >= Ui.S(110);
@@ -441,7 +453,11 @@ namespace TrustTunnelGui
                 int bw = Math.Min(w - Ui.S(48), btnExcl.GetPreferredSize(Size.Empty).Width);
                 btnExcl.SetBounds((w - bw) / 2, y, bw, Ui.S(32));
                 y += Ui.S(36);
+                var cs = chkAutoStart.GetPreferredSize(Size.Empty);
+                chkAutoStart.Location = new Point((w - cs.Width) / 2, y);
+                y += Ui.S(28);
             }
+            chkAutoStart.Visible = btnExcl.Visible;
             y += Ui.S(18);
 
             var tiles = new[] { tileIp, tileTime, tileDown, tileUp };
@@ -556,7 +572,14 @@ namespace TrustTunnelGui
             // если программа в прошлый раз закрылась аварийно, вернём приостановленный обход DPI
             if (!vpn.IsRunning) ResumeDpiBypass();
             HandleArgs(args, false);
-            if (data.Settings.AutoConnect && Selected != null && ClientInstalled && !vpn.IsRunning) Connect(Selected);
+            var autoProfile = data.Profiles.FirstOrDefault(x => x.AutoStart);
+            if (autoProfile != null && ClientInstalled && !vpn.IsRunning)
+            {
+                lstProfiles.SelectedItem = autoProfile;
+                vpn.Log("Автоподключение к «" + autoProfile.DisplayName + "»");
+                Connect(autoProfile, true); // без диалогов: при входе в Windows спрашивать некого
+            }
+            else if (data.Settings.AutoConnect && Selected != null && ClientInstalled && !vpn.IsRunning) Connect(Selected);
             UpdateBanners();
             UpdateStatusUi();
         }
@@ -602,6 +625,8 @@ namespace TrustTunnelGui
             exiting = true;
             timer.Stop();
             SystemEvents.UserPreferenceChanged -= OnSystemPreferenceChanged;
+            SystemEvents.PowerModeChanged -= OnPowerModeChanged;
+            System.Net.NetworkInformation.NetworkChange.NetworkAvailabilityChanged -= OnNetworkAvailabilityChanged;
             if (vpn.IsRunning)
             {
                 Cursor = Cursors.WaitCursor;
@@ -634,6 +659,7 @@ namespace TrustTunnelGui
             }
             // VPN выключен и переподключение не ожидается — возвращаем zapret / GoodbyeDPI
             if (!vpn.IsRunning && !reconnectAt.HasValue && !switching && HasPausedDpi) ResumeDpiBypass();
+            HealthCheckTick();
             UpdateStatusUi();
         }
 
@@ -647,6 +673,9 @@ namespace TrustTunnelGui
         void PauseDpiBypassIfNeeded(Profile p)
         {
             if (!p.IsTun || HasPausedDpi) return;
+            // В режиме «через VPN только выбранное» основной трафик (Discord, YouTube) идёт напрямую
+            // и по-прежнему нуждается в обходе DPI — его не трогаем.
+            if (p.VpnMode == "selective") return;
             DpiBypass.Detected found;
             try { found = DpiBypass.Detect(); } catch (Exception ex) { vpn.Log("Проверка zapret/GoodbyeDPI: " + ex.Message); return; }
             if (!found.Any) return;
@@ -752,21 +781,143 @@ namespace TrustTunnelGui
         {
             var p = vpn.ActiveProfile;
             bool wasUp = vpn.ConnectedSince != default(DateTime);
-            tray.ShowBalloonTip(3000, "TrustTunnel", vpn.LastError ?? "Соединение разорвано", ToolTipIcon.Warning);
-            if (data.Settings.AutoReconnect && p != null && !exiting)
+            if (reconnectAttempt == 0) tray.ShowBalloonTip(3000, "TrustTunnel", vpn.LastError ?? "Соединение разорвано", ToolTipIcon.Warning);
+            if ((data.Settings.AutoReconnect || p != null && p.AutoStart) && p != null && !exiting) ScheduleReconnect(p, wasUp);
+        }
+
+        /// <summary>
+        /// Переподключение без ограничения числа попыток: пауза растёт 3 → 6 → 12 → 24 → 48 → 60 с и дальше
+        /// не увеличивается. Появление сети или выход из сна сокращают ожидание до нуля.
+        /// </summary>
+        void ScheduleReconnect(Profile p, bool wasUp)
+        {
+            reconnectAttempt++;
+            int delay = Math.Min(60, 3 * (1 << Math.Min(reconnectAttempt - 1, 5)));
+            reconnectProfile = p;
+            reconnectAt = DateTime.Now.AddSeconds(delay);
+            vpn.Log("Повторное подключение через " + delay + " с (попытка " + reconnectAttempt + ")" +
+                    (wasUp || reconnectAttempt > 1 ? "" : " — если повторяется, проверьте журнал выше"));
+        }
+
+        // ---------- сторож соединения ----------
+
+        /// <summary>
+        /// Раз в 30 секунд проверяет, что сайт за туннелем открывается (для «только Claude» — claude.ai).
+        /// Процесс клиента может быть жив, а соединение с сервером — нет (смена сети, сон, сбой у провайдера):
+        /// после трёх неудач подряд переподключаемся.
+        /// </summary>
+        void HealthCheckTick()
+        {
+            if (vpn.State != VpnState.Connected || healthBusy || switching || RouteWarn) return;
+            if (DateTime.Now < nextHealthCheck) return;
+            var p = vpn.ActiveProfile;
+            if (p == null || !p.IsTun) return;
+            string url = ExclusionCatalog.HealthUrl(p);
+            if (url == null) return;
+            nextHealthCheck = DateTime.Now.AddSeconds(30);
+            healthBusy = true;
+            System.Threading.Tasks.Task.Run(() => Probe(url)).ContinueWith(t =>
             {
-                reconnectAttempt++;
-                if (reconnectAttempt > 20)
+                healthBusy = false;
+                if (vpn.State != VpnState.Connected || vpn.ActiveProfile != p) return;
+                if (t.Result)
                 {
-                    vpn.Log("Слишком много неудачных попыток — автопереподключение остановлено.");
-                    reconnectAttempt = 0;
+                    if (healthFails > 0) vpn.Log("✔ Связь через туннель восстановилась");
+                    healthFails = 0;
                     return;
                 }
-                int delay = Math.Min(60, 3 * (1 << Math.Min(reconnectAttempt - 1, 4)));
-                reconnectProfile = p;
-                reconnectAt = DateTime.Now.AddSeconds(delay);
-                vpn.Log("Повторное подключение через " + delay + " с" + (wasUp ? "" : " (проверьте журнал выше на ошибки конфигурации)"));
+                healthFails++;
+                vpn.Log("⚠ " + url + " не открывается через туннель (" + healthFails + "/3)");
+                nextHealthCheck = DateTime.Now.AddSeconds(10);
+                if (healthFails >= 3)
+                {
+                    healthFails = 0;
+                    vpn.Log("↻ Связь через туннель пропала — переподключаюсь");
+                    Reconnect(p);
+                }
+            }, System.Threading.Tasks.TaskScheduler.FromCurrentSynchronizationContext());
+        }
+
+        /// <summary>Любой HTTP-ответ (даже 403) означает, что связь есть; ошибка соединения или таймаут — нет.</summary>
+        static bool Probe(string url)
+        {
+            try
+            {
+                System.Net.ServicePointManager.SecurityProtocol |= (System.Net.SecurityProtocolType)3072;
+                var req = (System.Net.HttpWebRequest)System.Net.WebRequest.Create(url);
+                req.Method = "HEAD";
+                req.Timeout = 10000;
+                req.AllowAutoRedirect = false;
+                req.UserAgent = "TrustTunnelGUI/" + Program.AppVersion;
+                using (req.GetResponse()) return true;
             }
+            catch (System.Net.WebException ex)
+            {
+                return ex.Response != null; // сервер ответил ошибкой HTTP — значит, сеть работает
+            }
+            catch { return false; }
+        }
+
+        void OnPowerModeChanged(object sender, PowerModeChangedEventArgs e)
+        {
+            if (e.Mode != PowerModes.Resume) return;
+            BeginInvoke(new Action(() =>
+            {
+                var p = vpn.IsRunning ? vpn.ActiveProfile : reconnectProfile ?? data.Profiles.FirstOrDefault(x => x.AutoStart);
+                if (p == null || exiting) return;
+                vpn.Log("Компьютер вышел из сна — переподключаюсь через 5 с");
+                var t = new Timer { Interval = 5000 };
+                t.Tick += (s2, e2) => { t.Stop(); t.Dispose(); if (vpn.IsRunning) Reconnect(vpn.ActiveProfile); else Connect(p, true); };
+                t.Start();
+            }));
+        }
+
+        void OnNetworkAvailabilityChanged(object sender, System.Net.NetworkInformation.NetworkAvailabilityEventArgs e)
+        {
+            if (!e.IsAvailable) return;
+            BeginInvoke(new Action(() =>
+            {
+                if (reconnectAt.HasValue && !vpn.IsRunning)
+                {
+                    vpn.Log("Сеть появилась — переподключаюсь сразу");
+                    reconnectAt = DateTime.Now;
+                }
+            }));
+        }
+
+        // ---------- автозапуск с подключением ----------
+
+        void OnAutoStartToggled()
+        {
+            var p = vpn.IsRunning ? vpn.ActiveProfile : Selected;
+            if (p == null) return;
+            bool on = chkAutoStart.Checked;
+            foreach (var x in data.Profiles) x.AutoStart = on && x.Id == p.Id;
+            p.AutoStart = on;
+            if (on)
+            {
+                if (!SetAutostart(true))
+                {
+                    p.AutoStart = false;
+                    foreach (var x in data.Profiles) x.AutoStart = false;
+                    syncingAutoStart = true; chkAutoStart.Checked = false; syncingAutoStart = false;
+                    return;
+                }
+                data.Settings.AutoReconnect = true;
+                vpn.Log("«" + p.DisplayName + "»: запуск с Windows и автоподключение включены, соединение будет восстанавливаться само");
+                if (p.VpnMode != "selective")
+                    vpn.Log("Подсказка: чтобы через VPN шёл только Claude, откройте «Исключения» → «Быстрая настройка: через VPN только Claude и Anthropic».");
+                if (!vpn.IsRunning) Connect(p);
+            }
+            else
+            {
+                vpn.Log("«" + p.DisplayName + "»: автоподключение при входе в Windows выключено");
+                if (AutostartEnabled() && MessageBox.Show(this, "Убрать TrustTunnel из автозапуска Windows?", "TrustTunnel",
+                        MessageBoxButtons.YesNo, MessageBoxIcon.Question) == DialogResult.Yes)
+                    SetAutostart(false);
+            }
+            SaveData();
+            lstProfiles.Invalidate();
         }
 
         // =====================================================================
@@ -934,6 +1085,8 @@ namespace TrustTunnelGui
                 if (becameConnected)
                 {
                     reconnectAttempt = 0;
+                    healthFails = 0;
+                    nextHealthCheck = DateTime.Now.AddSeconds(20); // первая проверка — когда всё устоится
                     if (!Visible) tray.ShowBalloonTip(2000, "TrustTunnel", "Подключено: " + vpn.ActiveProfile.DisplayName, ToolTipIcon.Info);
                     CheckPublicIp(2000);
                 }
@@ -974,12 +1127,20 @@ namespace TrustTunnelGui
                 btnExcl.Text = exclText;
                 LayoutMain();
             }
+            bool auto = p != null && p.AutoStart;
+            if (chkAutoStart.Checked != auto)
+            {
+                syncingAutoStart = true;
+                chkAutoStart.Checked = auto;
+                syncingAutoStart = false;
+            }
 
             if (st == VpnState.Connected)
             {
                 if (publicIp != null)
                     tileIp.SetValue(publicIp,
-                        publicIpMatches == true ? "✔ VPN-сервер" : publicIpMatches == false ? "не IP сервера" : "",
+                        publicIpMatches == true ? "✔ VPN-сервер" : publicIpMatches == false ? "не IP сервера" :
+                        vpn.ActiveProfile != null && vpn.ActiveProfile.VpnMode == "selective" ? "для сайтов вне VPN" : "",
                         publicIpMatches == false ? t.Orange : (Color?)null);
                 else tileIp.SetValue(ipChecking ? "проверка…" : "—", "");
                 var up = DateTime.Now - vpn.ConnectedSince;
@@ -1073,8 +1234,11 @@ namespace TrustTunnelGui
                 if (seq != ipCheckSeq) return;
                 var p = vpn.ActiveProfile;
                 publicIp = ip;
-                publicIpMatches = vpn.State == VpnState.Connected && p != null ? ServerIps(p).Contains(ip) : (bool?)null;
-                vpn.Log("Внешний IP: " + ip + (publicIpMatches == true ? "  ✔ это адрес VPN-сервера" : publicIpMatches == false ? "  ⚠ не совпадает с адресом VPN-сервера" : ""));
+                // в выборочном режиме сайт проверки IP идёт мимо VPN — сравнивать с сервером бессмысленно
+                bool selective = p != null && p.VpnMode == "selective";
+                publicIpMatches = vpn.State == VpnState.Connected && p != null && !selective ? ServerIps(p).Contains(ip) : (bool?)null;
+                vpn.Log("Внешний IP: " + ip + (selective ? "  (для сайтов вне VPN)" :
+                        publicIpMatches == true ? "  ✔ это адрес VPN-сервера" : publicIpMatches == false ? "  ⚠ не совпадает с адресом VPN-сервера" : ""));
             }
             catch (Exception ex)
             {
@@ -1415,7 +1579,32 @@ namespace TrustTunnelGui
             // Программе нужны права администратора, поэтому автозапуск — через планировщик с наивысшими правами (без запроса UAC).
             int code;
             if (on)
-                code = RunHidden("schtasks.exe", "/Create /F /TN " + TaskName + " /SC ONLOGON /RL HIGHEST /TR \"\\\"" + Application.ExecutablePath + "\\\" --minimized\"");
+            {
+                // Описание задачи в XML: у задачи по умолчанию Планировщик через 72 часа завершает процесс
+                // и не запускает её от батареи — для VPN, который должен работать постоянно, это не годится.
+                string user = SecurityElement.Escape(WindowsIdentity.GetCurrent().Name);
+                string xml = "<?xml version=\"1.0\" encoding=\"UTF-16\"?>\n" +
+                    "<Task version=\"1.2\" xmlns=\"http://schemas.microsoft.com/windows/2004/02/mit/task\">\n" +
+                    "  <RegistrationInfo><Description>TrustTunnel GUI: запуск и подключение к VPN при входе в Windows</Description></RegistrationInfo>\n" +
+                    "  <Triggers><LogonTrigger><Enabled>true</Enabled><UserId>" + user + "</UserId><Delay>PT15S</Delay></LogonTrigger></Triggers>\n" +
+                    "  <Principals><Principal id=\"Author\"><UserId>" + user + "</UserId><LogonType>InteractiveToken</LogonType><RunLevel>HighestAvailable</RunLevel></Principal></Principals>\n" +
+                    "  <Settings>\n" +
+                    "    <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>\n" +
+                    "    <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>\n" +
+                    "    <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>\n" +
+                    "    <ExecutionTimeLimit>PT0S</ExecutionTimeLimit>\n" +
+                    "    <AllowStartOnDemand>true</AllowStartOnDemand>\n" +
+                    "    <StartWhenAvailable>true</StartWhenAvailable>\n" +
+                    "    <Enabled>true</Enabled>\n" +
+                    "    <Priority>7</Priority>\n" +
+                    "  </Settings>\n" +
+                    "  <Actions Context=\"Author\"><Exec><Command>" + SecurityElement.Escape(Application.ExecutablePath) + "</Command><Arguments>--minimized</Arguments></Exec></Actions>\n" +
+                    "</Task>\n";
+                string tmp = Path.Combine(Path.GetTempPath(), "ttgui_task_" + Guid.NewGuid().ToString("N") + ".xml");
+                File.WriteAllText(tmp, xml, Encoding.Unicode);
+                try { code = RunHidden("schtasks.exe", "/Create /F /TN " + TaskName + " /XML \"" + tmp + "\""); }
+                finally { try { File.Delete(tmp); } catch { } }
+            }
             else
                 code = RunHidden("schtasks.exe", "/Delete /F /TN " + TaskName);
             if (code != 0)
