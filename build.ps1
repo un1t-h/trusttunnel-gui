@@ -51,7 +51,8 @@ $manifest = Join-Path $obj 'app.manifest'
 (Get-Content (Join-Path $root 'app.manifest') -Raw).Replace('__LEVEL__', $level) | Set-Content $manifest -Encoding UTF8
 
 $refs = 'System.dll', 'System.Core.dll', 'System.Drawing.dll', 'System.Windows.Forms.dll', 'System.Web.Extensions.dll',
-        'System.Security.dll', 'System.IO.Compression.dll', 'System.IO.Compression.FileSystem.dll' |
+        'System.Security.dll', 'System.IO.Compression.dll', 'System.IO.Compression.FileSystem.dll',
+        'System.Management.dll', 'System.ServiceProcess.dll' |
         ForEach-Object { "/r:$fw\$_" }
 $sources = Get-ChildItem (Join-Path $root 'src') -Filter *.cs | ForEach-Object { $_.FullName }
 
@@ -62,7 +63,7 @@ Write-Host "OK: $exe ($level)"
 
 if ($Test) {
     $testExe = Join-Path $obj 'SelfTest.exe'
-    $libs = 'Profile.cs', 'DeepLink.cs', 'Toml.cs', 'ConfigBuilder.cs' | ForEach-Object { Join-Path $root "src\$_" }
+    $libs = 'Profile.cs', 'DeepLink.cs', 'Toml.cs', 'ConfigBuilder.cs', 'Exclusions.cs' | ForEach-Object { Join-Path $root "src\$_" }
     & $csc /nologo /target:exe /codepage:65001 "/out:$testExe" @refs @libs (Join-Path $root 'tests\SelfTest.cs')
     if ($LASTEXITCODE -ne 0) { throw "Ошибка компиляции тестов" }
     & $testExe

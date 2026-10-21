@@ -64,7 +64,7 @@ namespace TrustTunnelGui
             string runDir = Path.Combine(AppData.DataDir, "run");
             Directory.CreateDirectory(runDir);
             configPath = Path.Combine(runDir, "trusttunnel_client.toml");
-            File.WriteAllText(configPath, ConfigBuilder.Build(profile), new UTF8Encoding(false));
+            File.WriteAllText(configPath, ConfigBuilder.Build(profile, NetInfo.HomeSubnets()), new UTF8Encoding(false));
 
             var psi = new ProcessStartInfo(exe, "-c \"" + configPath + "\"")
             {

@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Text;
 using TrustTunnelGui;
 
@@ -201,6 +202,42 @@ mtu_size = 1_350
             Eq(p.Hostname, "vpn.example.com", "flat hostname");
             Eq(p.ClientRandom, "aabb", "flat client_random_prefix");
             Eq(p.AntiDpi, true, "flat anti_dpi");
+        }
+
+        // --- исключения: наборы, приложения, свои записи ---
+        {
+            var p = new Profile { Hostname = "h", Username = "u", Password = "p" };
+            p.Addresses.Add("1.2.3.4:443");
+            p.Exclusions.Add("example.com");
+            p.Exclusions.Add("discord.com"); // дубль с набором
+            p.ExclusionPresets.Add("discord");
+            p.ExclusionPresets.Add("нет-такого");
+            p.ExclusionApps.Add(new ExclusionApp { Name = "Game", Exe = "game.exe", Entries = new List<string> { "game.net", "5.6.7.8" } });
+            p.ExclusionApps.Add(new ExclusionApp { Name = "Off", Exe = "off.exe", Entries = new List<string> { "off.net" }, Enabled = false });
+            var eff = ExclusionCatalog.Effective(p);
+            Check(eff.Contains("example.com") && eff.Contains("discord.media") && eff.Contains("game.net") && eff.Contains("5.6.7.8"), "effective: все источники");
+            Check(!eff.Contains("off.net"), "effective: выключенное приложение не попадает");
+            Eq(eff.Count(x => x == "discord.com"), 1, "effective: без дублей");
+            Eq(ExclusionCatalog.Summary(p), "Discord, Game и ещё 2", "summary");
+            Eq(ExclusionCatalog.ForExecutable("Discord.exe").Id, "discord", "приложение → набор");
+
+            var t = TomlParser.Parse(ConfigBuilder.Build(p));
+            Check(((List<object>)t["exclusions"]).Contains("discord.gg"), "toml: набор раскрыт в exclusions");
+
+            // локальные сети
+            var home = new List<string> { "192.168.0.0/24" };
+            var direct = LanRouting.ExcludedRoutes(p, home);
+            Check(direct.Contains("192.168.0.0/16") && direct.Contains("10.0.0.0/8"), "LAN напрямую: частные сети мимо VPN");
+            p.LanViaVpn = true;
+            var via = LanRouting.ExcludedRoutes(p, home);
+            Check(!via.Contains("10.0.0.0/8") && !via.Contains("192.168.0.0/16") && !via.Contains("172.16.0.0/12"), "LAN через VPN: частные сети убраны");
+            Check(via.Contains("192.168.0.0/24") && via.Contains("169.254.0.0/16"), "LAN через VPN: домашняя сеть и link-local остаются");
+            p.LanKeepHome = false;
+            Check(!LanRouting.ExcludedRoutes(p, home).Contains("192.168.0.0/24"), "LAN через VPN без домашней сети");
+            var t2 = TomlParser.Parse(ConfigBuilder.Build(p, home));
+            Check(!((List<object>)t2["listener.tun.excluded_routes"]).Contains("10.0.0.0/8"), "toml: excluded_routes по переключателю");
+            p.ExcludedRoutes.Add("1.1.1.1/32");
+            Eq(LanRouting.ExcludedRoutes(p, home).Count, 1, "свои маршруты важнее переключателя");
         }
 
         // --- ошибки ---

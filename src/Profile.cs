@@ -32,7 +32,11 @@ namespace TrustTunnelGui
 
         // Маршрутизация
         public string VpnMode { get; set; }
-        public List<string> Exclusions { get; set; }
+        public List<string> Exclusions { get; set; }          // свои сайты и адреса
+        public List<string> ExclusionPresets { get; set; }    // включённые готовые наборы (Discord, YouTube…)
+        public List<ExclusionApp> ExclusionApps { get; set; } // приложения, собранные по подключениям
+        public bool LanViaVpn { get; set; }                   // частные сети (192.168.x.x и т.п.) через VPN
+        public bool LanKeepHome { get; set; }                 // …кроме своей текущей локальной сети
         public bool KillSwitch { get; set; }
         public string KillSwitchAllowPorts { get; set; }
 
@@ -83,6 +87,9 @@ namespace TrustTunnelGui
             SubscriptionUrl = "";
             VpnMode = "general";
             Exclusions = new List<string>();
+            ExclusionPresets = new List<string>();
+            ExclusionApps = new List<ExclusionApp>();
+            LanKeepHome = true;
             KillSwitch = true;
             KillSwitchAllowPorts = "";
             ListenerType = "tun";
@@ -127,9 +134,17 @@ namespace TrustTunnelGui
         /// <summary>"system" | "light" | "dark"</summary>
         public string ThemeMode { get; set; }
         public bool ShowLog { get; set; }
+        /// <summary>Приостанавливать zapret / GoodbyeDPI на время VPN.</summary>
+        public bool PauseDpiBypass { get; set; }
+        // что приостановлено (чтобы вернуть даже после сбоя программы)
+        public List<string> PausedServices { get; set; }
+        public List<string> PausedProcesses { get; set; }
 
         public AppSettings()
         {
+            PauseDpiBypass = true;
+            PausedServices = new List<string>();
+            PausedProcesses = new List<string>();
             ThemeMode = "system";
             ClientDir = "";
             LastProfileId = "";

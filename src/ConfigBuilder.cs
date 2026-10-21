@@ -21,6 +21,12 @@ namespace TrustTunnelGui
         /// </summary>
         public static string Build(Profile p)
         {
+            return Build(p, null);
+        }
+
+        /// <param name="homeSubnets">текущие домашние подсети — остаются напрямую в режиме «локальные сети через VPN»</param>
+        public static string Build(Profile p, IEnumerable<string> homeSubnets)
+        {
             var sb = new StringBuilder();
             sb.Append("# Сгенерировано TrustTunnel GUI. Профиль: ").Append(p.DisplayName.Replace('\n', ' ')).Append('\n');
             Line(sb, "loglevel", TomlWriter.Str(string.IsNullOrEmpty(p.LogLevel) ? "info" : p.LogLevel));
@@ -29,7 +35,7 @@ namespace TrustTunnelGui
             var ports = ParsePorts(p.KillSwitchAllowPorts);
             if (ports.Count > 0) Line(sb, "killswitch_allow_ports", "[" + string.Join(", ", ports) + "]");
             if (!p.PostQuantum) Line(sb, "post_quantum_group_enabled", "false");
-            Line(sb, "exclusions", TomlWriter.Arr(p.Exclusions));
+            Line(sb, "exclusions", TomlWriter.Arr(ExclusionCatalog.Effective(p)));
             if (!string.IsNullOrWhiteSpace(p.ExtraToml))
                 sb.Append(p.ExtraToml.Replace("\r\n", "\n").TrimEnd()).Append('\n');
 
@@ -58,7 +64,7 @@ namespace TrustTunnelGui
                 sb.Append("\n[listener.tun]\n");
                 if (!string.IsNullOrEmpty(p.DeviceName)) Line(sb, "device_name", TomlWriter.Str(p.DeviceName));
                 Line(sb, "included_routes", TomlWriter.Arr(p.IncludedRoutes.Count > 0 ? (IEnumerable<string>)p.IncludedRoutes : DefaultIncludedRoutes));
-                Line(sb, "excluded_routes", TomlWriter.Arr(p.ExcludedRoutes.Count > 0 ? (IEnumerable<string>)p.ExcludedRoutes : DefaultExcludedRoutes));
+                Line(sb, "excluded_routes", TomlWriter.Arr(LanRouting.ExcludedRoutes(p, homeSubnets)));
                 Line(sb, "mtu_size", (p.MtuSize > 0 ? p.MtuSize : 1350).ToString(CultureInfo.InvariantCulture));
                 Line(sb, "change_system_dns", TomlWriter.Bool(p.ChangeSystemDns));
             }

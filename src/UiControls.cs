@@ -53,6 +53,7 @@ namespace TrustTunnelGui
         public const string Shield = "";
         public const string Refresh = "";
         public const string Keyboard = "";
+        public const string Filter = "";
     }
 
     public enum ButtonKind { Primary, Secondary, Ghost, Danger, Nav }
@@ -153,8 +154,18 @@ namespace TrustTunnelGui
                     fg = Color.White;
                     break;
                 case ButtonKind.Secondary:
-                    bg = pressed ? Theme.Mix(t.Hover, t.Border, 0.5f) : hover ? t.Hover : t.Surface;
-                    border = t.Border;
+                    if (isChecked)
+                    {
+                        // выбранный «чип» / вариант переключателя
+                        bg = hover ? Theme.Mix(t.Selected, t.Accent, 0.12f) : t.Selected;
+                        border = t.Accent;
+                        fg = t.Accent;
+                    }
+                    else
+                    {
+                        bg = pressed ? Theme.Mix(t.Hover, t.Border, 0.5f) : hover ? t.Hover : t.Surface;
+                        border = t.Border;
+                    }
                     break;
                 case ButtonKind.Ghost:
                     bg = pressed ? Theme.Mix(t.Hover, t.Border, 0.5f) : isChecked ? t.Selected : hover ? t.Hover : Color.Transparent;

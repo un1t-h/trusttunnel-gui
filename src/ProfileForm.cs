@@ -269,8 +269,9 @@ namespace TrustTunnelGui
         {
             var g = Grid("Маршруты и DNS", "Что пускать через VPN, а что — напрямую.");
             AddRow(g, "Режим", cmbMode = Combo("Всё через VPN, кроме исключений", "Через VPN только исключения"));
-            AddRow(g, "Исключения", txtExclusions = Multi(7),
-                "По одному на строку: example.com (вместе с поддоменами), *.example.com, 1.2.3.4, 10.0.0.0/8");
+            AddRow(g, "Свои исключения", txtExclusions = Multi(7),
+                "По одному на строку: example.com (вместе с поддоменами), *.example.com, 1.2.3.4, 10.0.0.0/8.\n" +
+                "Готовые сервисы (Discord, YouTube…), приложения и локальные сети — в окне «Исключения» на главном экране.");
             AddHeader(g, "Защита от утечек");
             AddCheck(g, chkKill = new CheckBox { Text = "Kill switch — блокировать интернет, если VPN оборвался" });
             AddRow(g, "Разрешённые порты", txtKillPorts = new TextBox(), "Входящие локальные порты, которые остаются доступны при kill switch, через запятую");

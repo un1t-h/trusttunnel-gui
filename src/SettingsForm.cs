@@ -40,6 +40,9 @@ namespace TrustTunnelGui
                 if (!main.SetAutostart(v)) { chkAuto.Checked = !v; }
             });
             Check(g, "Открывать ссылки tt:// в этой программе", MainForm.UrlHandlerEnabled(), v => main.SetUrlHandler(v));
+            Check(g, "Приостанавливать zapret / GoodbyeDPI, пока включён VPN", s.PauseDpiBypass, v => { s.PauseDpiBypass = v; main.SaveData(); });
+            g.Controls.Add(Muted("Внутри VPN-туннеля программы обхода DPI портят соединения — перестают работать Discord, YouTube и другие сайты из их списков. " +
+                                 "После отключения VPN обход запускается снова с прежними настройками."));
 
             Header(g, "Оформление");
             var theme = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Width = Ui.S(240), Margin = new Padding(Ui.S(3), Ui.S(4), 0, Ui.S(4)) };

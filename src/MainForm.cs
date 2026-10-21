@@ -39,7 +39,9 @@ namespace TrustTunnelGui
         Label lblState, lblSub;
         InfoTile tileIp, tileTime, tileDown, tileUp;
         Banner bnClient, bnAdmin, bnRoute, bnInstall;
-        FlatButton btnLog, btnEdit;
+        FlatButton btnLog, btnEdit, btnExcl;
+        Banner bnDpi;
+        bool switching; // идёт переключение/переподключение профиля — не возвращать обход DPI в паузе
         Label lblNoServers;
         TextBox txtLog;
         NotifyIcon tray;
@@ -148,6 +150,7 @@ namespace TrustTunnelGui
             moreMenu.Items.Add("Добавить из файла .toml…", null, (s, e) => ImportFileDialog());
             moreMenu.Items.Add("Поделиться выбранным сервером (ссылка tt://)", null, (s, e) => ExportLink(Selected));
             moreMenu.Items.Add("Показать конфиг выбранного сервера", null, (s, e) => ShowToml(Selected));
+            moreMenu.Items.Add("Исключения выбранного сервера…", null, (s, e) => OpenExclusions(Selected));
             moreMenu.Items.Add(new ToolStripSeparator());
             moreMenu.Items.Add("Проверить внешний IP", null, (s, e) => CheckPublicIp(0));
             moreMenu.Items.Add("Открыть файл журнала", null, (s, e) => OpenLogFile());
@@ -160,6 +163,7 @@ namespace TrustTunnelGui
             listMenu = NewMenu();
             listMenu.Items.Add("Подключиться", null, (s, e) => { if (vpn.IsRunning) SwitchTo(Selected); else Connect(Selected); });
             listMenu.Items.Add("Изменить…", null, (s, e) => EditProfile(Selected));
+            listMenu.Items.Add("Исключения…", null, (s, e) => OpenExclusions(Selected));
             listMenu.Items.Add("Дублировать", null, (s, e) => DuplicateProfile(Selected));
             listMenu.Items.Add("Поделиться (ссылка tt://)", null, (s, e) => ExportLink(Selected));
             listMenu.Items.Add("Показать конфиг", null, (s, e) => ShowToml(Selected));
@@ -244,7 +248,10 @@ namespace TrustTunnelGui
             tileTime = new InfoTile { Glyph = Glyphs.Timer, Caption = "Время в сети" };
             tileDown = new InfoTile { Glyph = Glyphs.Download, Caption = "Загрузка" };
             tileUp = new InfoTile { Glyph = Glyphs.Upload, Caption = "Отдача" };
-            mainArea.Controls.AddRange(new Control[] { power, lblState, lblSub, tileIp, tileTime, tileDown, tileUp });
+            btnExcl = new FlatButton { Kind = ButtonKind.Ghost, Glyph = Glyphs.Filter, Font = Theme.UiFont(9.5f) };
+            btnExcl.Click += (s, e) => OpenExclusions(vpn.IsRunning ? vpn.ActiveProfile : Selected);
+            tips.SetToolTip(btnExcl, "Что идёт мимо VPN: сервисы, приложения, сайты, локальные сети");
+            mainArea.Controls.AddRange(new Control[] { power, lblState, lblSub, btnExcl, tileIp, tileTime, tileDown, tileUp });
             mainArea.Layout += (s, e) => LayoutMain();
 
             emptyPanel = BuildEmptyState();
@@ -259,10 +266,13 @@ namespace TrustTunnelGui
             bnAdmin.ActionClick += (s, e) => RelaunchAsAdmin();
             bnRoute = new Banner();
             bnRoute.ActionClick += (s, e) => { if (!logPanel.Visible) ToggleLog(); };
-            foreach (var b in new[] { bnInstall, bnClient, bnAdmin, bnRoute }) b.Visible = false;
+            bnDpi = new Banner();
+            bnDpi.ActionClick += (s, e) => DpiBannerAction();
+            foreach (var b in new[] { bnInstall, bnClient, bnAdmin, bnRoute, bnDpi }) b.Visible = false;
 
             content.Controls.Add(mainArea);
             content.Controls.Add(logPanel);
+            content.Controls.Add(bnDpi);
             content.Controls.Add(bnRoute);
             content.Controls.Add(bnAdmin);
             content.Controls.Add(bnClient);
@@ -411,7 +421,7 @@ namespace TrustTunnelGui
             int tileW = cols == 4 ? Math.Min(Ui.S(185), fourW) : Math.Min(Ui.S(220), (w - gap - Ui.S(48)) / 2);
             int rows = 4 / cols;
             int tilesH = rows * tileH + (rows - 1) * gap;
-            int textH = Ui.S(6) + lblState.Height + lblSub.Height;
+            int textH = Ui.S(6) + lblState.Height + lblSub.Height + (btnExcl.Visible ? Ui.S(36) : 0);
             // Кнопка подстраивается под высоту; если места совсем мало (открыт журнал) — прячем плитки.
             int pb = Math.Min(Ui.S(200), h - textH - Ui.S(18) - tilesH - Ui.S(24));
             bool showTiles = pb >= Ui.S(110);
@@ -425,7 +435,14 @@ namespace TrustTunnelGui
             lblState.SetBounds(Ui.S(24), y, w - Ui.S(48), lblState.Height);
             y += lblState.Height;
             lblSub.SetBounds(Ui.S(24), y, w - Ui.S(48), lblSub.Height);
-            y += lblSub.Height + Ui.S(18);
+            y += lblSub.Height;
+            if (btnExcl.Visible)
+            {
+                int bw = Math.Min(w - Ui.S(48), btnExcl.GetPreferredSize(Size.Empty).Width);
+                btnExcl.SetBounds((w - bw) / 2, y, bw, Ui.S(32));
+                y += Ui.S(36);
+            }
+            y += Ui.S(18);
 
             var tiles = new[] { tileIp, tileTime, tileDown, tileUp };
             int rowW = cols * tileW + (cols - 1) * gap;
@@ -536,6 +553,8 @@ namespace TrustTunnelGui
             if (!isAdmin) vpn.Log("⚠ Программа запущена без прав администратора — TUN-режим работать не будет.");
             if (!ClientInstalled) vpn.Log("Компонент trusttunnel_client не найден.");
             KillOrphans(false);
+            // если программа в прошлый раз закрылась аварийно, вернём приостановленный обход DPI
+            if (!vpn.IsRunning) ResumeDpiBypass();
             HandleArgs(args, false);
             if (data.Settings.AutoConnect && Selected != null && ClientInstalled && !vpn.IsRunning) Connect(Selected);
             UpdateBanners();
@@ -588,6 +607,7 @@ namespace TrustTunnelGui
                 Cursor = Cursors.WaitCursor;
                 vpn.Shutdown(8000);
             }
+            ResumeDpiBypass();
             tray.Visible = false;
             tray.Dispose();
             base.OnFormClosing(e);
@@ -612,7 +632,68 @@ namespace TrustTunnelGui
                     Connect(reconnectProfile, true);
                 }
             }
+            // VPN выключен и переподключение не ожидается — возвращаем zapret / GoodbyeDPI
+            if (!vpn.IsRunning && !reconnectAt.HasValue && !switching && HasPausedDpi) ResumeDpiBypass();
             UpdateStatusUi();
+        }
+
+        // =====================================================================
+        // Совместимость с zapret / GoodbyeDPI
+        // =====================================================================
+
+        bool HasPausedDpi { get { return data.Settings.PausedServices.Count > 0 || data.Settings.PausedProcesses.Count > 0; } }
+
+        /// <summary>Перед подключением в режиме TUN: приостановить обход DPI (или предупредить, если это выключено).</summary>
+        void PauseDpiBypassIfNeeded(Profile p)
+        {
+            if (!p.IsTun || HasPausedDpi) return;
+            DpiBypass.Detected found;
+            try { found = DpiBypass.Detect(); } catch (Exception ex) { vpn.Log("Проверка zapret/GoodbyeDPI: " + ex.Message); return; }
+            if (!found.Any) return;
+            if (!data.Settings.PauseDpiBypass)
+            {
+                vpn.Log("⚠ Работает " + found.Describe() + " — внутри VPN он искажает трафик (Discord, YouTube могут не работать).");
+                return;
+            }
+            var paused = DpiBypass.Pause(found, s => vpn.Log(s));
+            data.Settings.PausedServices = paused.Services;
+            data.Settings.PausedProcesses = paused.Processes.Select(DpiBypass.Pack).ToList();
+            SaveData();
+        }
+
+        void ResumeDpiBypass()
+        {
+            if (!HasPausedDpi) return;
+            var services = data.Settings.PausedServices.ToList();
+            var procs = data.Settings.PausedProcesses.Select(DpiBypass.Unpack).Where(x => x != null).ToList();
+            data.Settings.PausedServices = new List<string>();
+            data.Settings.PausedProcesses = new List<string>();
+            SaveData();
+            try { DpiBypass.Resume(services, procs, s => vpn.Log(s)); }
+            catch (Exception ex) { vpn.Log("Не удалось вернуть обход DPI: " + ex.Message); }
+            UpdateBanners();
+        }
+
+        void DpiBannerAction()
+        {
+            if (HasPausedDpi)
+            {
+                MessageBox.Show(this,
+                    "zapret и GoodbyeDPI перехватывают пакеты на всех сетевых адаптерах, включая VPN, и подмешивают в них «фальшивые» пакеты.\n\n" +
+                    "В интернете такие пакеты отбрасывает сервер, а внутри туннеля их принимает TrustTunnel — соединения Discord, YouTube и других сайтов из списков zapret ломаются.\n\n" +
+                    "Пока VPN включён, обход DPI не нужен: провайдер не видит, что идёт внутри туннеля. Поэтому на время подключения TrustTunnel приостанавливает его и запускает снова после отключения.\n\n" +
+                    "Учтите: сайты из исключений (идущие мимо VPN) в это время работают без обхода DPI. Отключить приостановку можно в настройках.",
+                    "zapret и VPN", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
+            }
+            data.Settings.PauseDpiBypass = true;
+            SaveData();
+            if (vpn.IsRunning && vpn.ActiveProfile != null)
+            {
+                vpn.Log("Приостановка обхода DPI включена — переподключаюсь, чтобы применить");
+                Reconnect(vpn.ActiveProfile);
+            }
+            UpdateBanners();
         }
 
         void DrainLog()
@@ -745,6 +826,7 @@ namespace TrustTunnelGui
                         return;
                 }
             }
+            PauseDpiBypassIfNeeded(p);
             try
             {
                 vpn.Connect(p, ClientDir);
@@ -761,15 +843,45 @@ namespace TrustTunnelGui
         void SwitchTo(Profile p)
         {
             if (p == null || vpn.ActiveProfile == p) return;
+            Reconnect(p);
+        }
+
+        /// <summary>Отключиться и подключиться к профилю заново (другому или изменённому).</summary>
+        void Reconnect(Profile p)
+        {
+            if (p == null) return;
+            switching = true;
+            CancelReconnect();
             vpn.Disconnect();
             var t = new Timer { Interval = 300 };
             DateTime started = DateTime.Now;
             t.Tick += (s, e) =>
             {
-                if (!vpn.IsRunning) { t.Stop(); t.Dispose(); Connect(p); }
-                else if ((DateTime.Now - started).TotalSeconds > 15) { t.Stop(); t.Dispose(); }
+                if (!vpn.IsRunning) { t.Stop(); t.Dispose(); Connect(p); switching = false; }
+                else if ((DateTime.Now - started).TotalSeconds > 15) { t.Stop(); t.Dispose(); switching = false; }
             };
             t.Start();
+        }
+
+        /// <summary>Окно «Исключения» для профиля; при подключении к нему предлагает сразу применить изменения.</summary>
+        void OpenExclusions(Profile p)
+        {
+            if (p == null) { ImportLinkDialog(); return; }
+            using (var f = new ExclusionsForm(p, NetInfo.HomeSubnets()))
+            {
+                if (f.ShowDialog(this) != DialogResult.OK) return;
+                int idx = data.Profiles.FindIndex(x => x.Id == p.Id);
+                if (idx < 0) return;
+                data.Profiles[idx] = f.Result;
+                SaveData();
+                RefreshProfiles(f.Result.Id);
+                vpn.Log("Исключения «" + f.Result.DisplayName + "»: " + ExclusionCatalog.Summary(f.Result) +
+                        ", " + LanRouting.Describe(f.Result, NetInfo.HomeSubnets()));
+                if (vpn.IsRunning && vpn.ActiveProfile != null && vpn.ActiveProfile.Id == p.Id &&
+                    MessageBox.Show(this, "Применить изменения сейчас? VPN переподключится на пару секунд.", "Исключения",
+                        MessageBoxButtons.YesNo, MessageBoxIcon.Question) == DialogResult.Yes)
+                    Reconnect(f.Result);
+            }
         }
 
         string StateTitle()
@@ -852,6 +964,17 @@ namespace TrustTunnelGui
             }
             if (lblSub.Text != sub) lblSub.Text = sub;
 
+            // кнопка «Исключения: …» под статусом
+            bool showExcl = p != null;
+            string exclText = p == null ? "" : "Исключения: " + ExclusionCatalog.Summary(p) + (p.LanViaVpn ? " · локальные сети через VPN" : "");
+            if (p != null && p.VpnMode == "selective") exclText = "Через VPN только: " + ExclusionCatalog.Summary(p);
+            if (btnExcl.Visible != showExcl || btnExcl.Text != exclText)
+            {
+                btnExcl.Visible = showExcl;
+                btnExcl.Text = exclText;
+                LayoutMain();
+            }
+
             if (st == VpnState.Connected)
             {
                 if (publicIp != null)
@@ -901,6 +1024,23 @@ namespace TrustTunnelGui
 
             bnRoute.Visible = RouteWarn;
             if (bnRoute.Visible) bnRoute.Set(BannerKind.Warning, "Трафик идёт мимо VPN — отключите другие VPN.", "Подробнее");
+
+            bnDpi.Visible = false;
+            if (HasPausedDpi)
+            {
+                bnDpi.Visible = true;
+                bnDpi.Set(BannerKind.Info, "zapret приостановлен на время VPN — внутри туннеля он ломает Discord и YouTube.", "Почему?");
+            }
+            else if (vpn.IsRunning && vpn.ActiveProfile != null && vpn.ActiveProfile.IsTun && !data.Settings.PauseDpiBypass)
+            {
+                DpiBypass.Detected d = null;
+                try { d = DpiBypass.Detect(); } catch { }
+                if (d != null && d.Any)
+                {
+                    bnDpi.Visible = true;
+                    bnDpi.Set(BannerKind.Warning, "Работает " + d.Describe() + " — внутри VPN он ломает Discord и YouTube.", "Приостанавливать");
+                }
+            }
             ResumeLayout(true);
         }
 
