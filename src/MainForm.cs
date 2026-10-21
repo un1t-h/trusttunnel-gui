@@ -676,17 +676,21 @@ namespace TrustTunnelGui
         void PauseDpiBypassIfNeeded(Profile p)
         {
             if (!p.IsTun || HasPausedDpi) return;
-            // В режиме «через VPN только выбранное» основной трафик (Discord, YouTube) идёт напрямую
-            // и по-прежнему нуждается в обходе DPI — его не трогаем.
-            if (p.VpnMode == "selective") return;
+            // Приостанавливаем и в режиме «через VPN только выбранное»: WinDivert отправляет перехваченные
+            // пакеты заново по таблице маршрутов, и прямые соединения клиента на 80/443 уходят обратно в туннель.
+            bool selective = p.VpnMode == "selective";
             DpiBypass.Detected found;
             try { found = DpiBypass.Detect(); } catch (Exception ex) { vpn.Log("Проверка zapret/GoodbyeDPI: " + ex.Message); return; }
             if (!found.Any) return;
             if (!data.Settings.PauseDpiBypass)
             {
-                vpn.Log("⚠ Работает " + found.Describe() + " — внутри VPN он искажает трафик (Discord, YouTube могут не работать).");
+                vpn.Log(selective
+                    ? "⚠ Работает " + found.Describe() + " — в режиме «только выбранное» он ломает прямые соединения на портах 80/443 (сайты не открываются)."
+                    : "⚠ Работает " + found.Describe() + " — внутри VPN он искажает трафик (Discord, YouTube могут не работать).");
                 return;
             }
+            if (selective)
+                vpn.Log("Обход DPI приостановлен: он ломает прямые соединения клиента. Сайты, которым нужен zapret (YouTube, Discord), добавьте в «через VPN».");
             var paused = DpiBypass.Pause(found, s => vpn.Log(s));
             data.Settings.PausedServices = paused.Services;
             data.Settings.PausedProcesses = paused.Processes.Select(DpiBypass.Pack).ToList();
@@ -714,7 +718,8 @@ namespace TrustTunnelGui
                     "zapret и GoodbyeDPI перехватывают пакеты на всех сетевых адаптерах, включая VPN, и подмешивают в них «фальшивые» пакеты.\n\n" +
                     "В интернете такие пакеты отбрасывает сервер, а внутри туннеля их принимает TrustTunnel — соединения Discord, YouTube и других сайтов из списков zapret ломаются.\n\n" +
                     "Пока VPN включён, обход DPI не нужен: провайдер не видит, что идёт внутри туннеля. Поэтому на время подключения TrustTunnel приостанавливает его и запускает снова после отключения.\n\n" +
-                    "Учтите: сайты из исключений (идущие мимо VPN) в это время работают без обхода DPI. Отключить приостановку можно в настройках.",
+                    "В режиме «через VPN только выбранное» zapret мешает и прямым соединениям: перехваченные пакеты на портах 80/443 он отправляет заново, и Windows возвращает их в туннель — сайты не открываются.\n\n" +
+                    "Учтите: сайты, идущие мимо VPN, в это время работают без обхода DPI. Если YouTube или Discord напрямую не открываются, добавьте их в «через VPN» (окно «Исключения»). Отключить приостановку можно в настройках.",
                     "zapret и VPN", MessageBoxButtons.OK, MessageBoxIcon.Information);
                 return;
             }
@@ -1226,7 +1231,9 @@ namespace TrustTunnelGui
                 if (d != null && d.Any)
                 {
                     bnDpi.Visible = true;
-                    bnDpi.Set(BannerKind.Warning, "Работает " + d.Describe() + " — внутри VPN он ломает Discord и YouTube.", "Приостанавливать");
+                    bnDpi.Set(BannerKind.Warning, vpn.ActiveProfile.VpnMode == "selective"
+                        ? "Работает " + d.Describe() + " — он ломает прямые соединения, сайты вне VPN не открываются."
+                        : "Работает " + d.Describe() + " — внутри VPN он ломает Discord и YouTube.", "Приостанавливать");
                 }
             }
             ResumeLayout(true);
