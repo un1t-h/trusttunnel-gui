@@ -35,6 +35,8 @@ namespace TrustTunnelGui
         public DateTime ConnectedSince { get; private set; }
         public string LastError { get; private set; }
         public int? LastExitCode { get; private set; }
+        /// <summary>bound_if, с которым запущен клиент (адаптер для прямых соединений).</summary>
+        public string BoundIf { get; private set; }
 
         /// <summary>Процесс завершился сам (не по кнопке «Отключить»).</summary>
         public event Action UnexpectedExit;
@@ -64,7 +66,16 @@ namespace TrustTunnelGui
             string runDir = Path.Combine(AppData.DataDir, "run");
             Directory.CreateDirectory(runDir);
             configPath = Path.Combine(runDir, "trusttunnel_client.toml");
-            File.WriteAllText(configPath, ConfigBuilder.Build(profile, NetInfo.HomeSubnets()), new UTF8Encoding(false));
+            // адаптер для прямых соединений — запоминаем, чтобы переподключиться, если сеть сменится
+            BoundIf = string.IsNullOrEmpty(profile.BoundIf) ? NetInfo.PhysicalInterfaceIndex() : profile.BoundIf;
+            File.WriteAllText(configPath, ConfigBuilder.Build(profile, NetInfo.HomeSubnets(), BoundIf), new UTF8Encoding(false));
+            if (profile.IsTun)
+            {
+                var phys = NetInfo.PhysicalInterface();
+                Log(string.IsNullOrEmpty(BoundIf)
+                    ? "⚠ Не найден физический сетевой адаптер — прямые соединения (мимо VPN) могут не работать"
+                    : "Прямые соединения через адаптер «" + (string.IsNullOrEmpty(profile.BoundIf) && phys != null ? phys.Name : BoundIf) + "» (bound_if = " + BoundIf + ")");
+            }
 
             var psi = new ProcessStartInfo(exe, "-c \"" + configPath + "\"")
             {

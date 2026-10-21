@@ -96,6 +96,8 @@ namespace TrustTunnelGui
             SystemEvents.UserPreferenceChanged += OnSystemPreferenceChanged;
             SystemEvents.PowerModeChanged += OnPowerModeChanged;
             System.Net.NetworkInformation.NetworkChange.NetworkAvailabilityChanged += OnNetworkAvailabilityChanged;
+            System.Net.NetworkInformation.NetworkChange.NetworkAddressChanged += OnNetworkAddressChanged;
+            netChangeTimer.Tick += (s, e) => { netChangeTimer.Stop(); CheckPhysicalInterfaceChanged(); };
             vpn.UnexpectedExit += OnUnexpectedExit;
             timer.Tick += (s, e) => OnTick();
             timer.Start();
@@ -627,6 +629,7 @@ namespace TrustTunnelGui
             SystemEvents.UserPreferenceChanged -= OnSystemPreferenceChanged;
             SystemEvents.PowerModeChanged -= OnPowerModeChanged;
             System.Net.NetworkInformation.NetworkChange.NetworkAvailabilityChanged -= OnNetworkAvailabilityChanged;
+            System.Net.NetworkInformation.NetworkChange.NetworkAddressChanged -= OnNetworkAddressChanged;
             if (vpn.IsRunning)
             {
                 Cursor = Cursors.WaitCursor;
@@ -883,6 +886,30 @@ namespace TrustTunnelGui
                     reconnectAt = DateTime.Now;
                 }
             }));
+        }
+
+        readonly Timer netChangeTimer = new Timer { Interval = 3000 };
+
+        /// <summary>Смена адресов сети (Wi-Fi ↔ кабель, другой роутер) — проверим через 3 с, когда всё устоится.</summary>
+        void OnNetworkAddressChanged(object sender, EventArgs e)
+        {
+            try { BeginInvoke(new Action(() => { netChangeTimer.Stop(); netChangeTimer.Start(); })); } catch { }
+        }
+
+        /// <summary>
+        /// bound_if задаётся явно, поэтому клиент сам не следит за сменой сети. Если физический адаптер
+        /// сменился (например, отключили кабель и работает Wi-Fi) — переподключаемся с новым.
+        /// </summary>
+        void CheckPhysicalInterfaceChanged()
+        {
+            if (!vpn.IsRunning || switching || exiting) return;
+            var p = vpn.ActiveProfile;
+            if (p == null || !p.IsTun || !string.IsNullOrEmpty(p.BoundIf)) return;
+            var now = NetInfo.PhysicalInterfaceIndex();
+            if (now == null || now == vpn.BoundIf) return;
+            var phys = NetInfo.PhysicalInterface();
+            vpn.Log("Сменилась сеть — теперь «" + (phys != null ? phys.Name : now) + "». Переподключаюсь с новым адаптером");
+            Reconnect(p);
         }
 
         // ---------- автозапуск с подключением ----------

@@ -43,6 +43,46 @@ namespace TrustTunnelGui
             return res;
         }
 
+        /// <summary>
+        /// Физический адаптер с выходом в интернет — для прямых соединений (bound_if).
+        /// Клиент TrustTunnel на Windows не всегда определяет его сам, и тогда в режиме
+        /// «через VPN только выбранное» весь остальной интернет перестаёт работать
+        /// (см. TrustTunnel/TrustTunnelClient#56). VPN-адаптеры пропускаются; при нескольких
+        /// подходящих предпочитаем проводной.
+        /// </summary>
+        public static NetworkInterface PhysicalInterface()
+        {
+            NetworkInterface best = null;
+            int bestScore = int.MinValue;
+            try
+            {
+                foreach (var n in NetworkInterface.GetAllNetworkInterfaces())
+                {
+                    if (n.OperationalStatus != OperationalStatus.Up) continue;
+                    if (n.NetworkInterfaceType == NetworkInterfaceType.Loopback || n.NetworkInterfaceType == NetworkInterfaceType.Tunnel) continue;
+                    if (VpnLike.IsMatch(n.Name + " " + n.Description)) continue;
+                    IPInterfaceProperties props;
+                    try { props = n.GetIPProperties(); } catch { continue; }
+                    if (!props.GatewayAddresses.Any(g => g.Address.AddressFamily == AddressFamily.InterNetwork && !g.Address.Equals(IPAddress.Any))) continue;
+                    try { props.GetIPv4Properties(); } catch { continue; }
+                    int score = n.NetworkInterfaceType == NetworkInterfaceType.Ethernet ? 3 :
+                                n.NetworkInterfaceType == NetworkInterfaceType.Wireless80211 ? 2 : 1;
+                    if (n.Speed > 0) score = score * 1000 + (int)Math.Min(999, n.Speed / 10000000); // при равенстве — быстрее
+                    if (score > bestScore) { best = n; bestScore = score; }
+                }
+            }
+            catch { }
+            return best;
+        }
+
+        /// <summary>Индекс физического адаптера (IPv4) строкой — в формате, который понимает bound_if на Windows.</summary>
+        public static string PhysicalInterfaceIndex()
+        {
+            var n = PhysicalInterface();
+            if (n == null) return null;
+            try { return n.GetIPProperties().GetIPv4Properties().Index.ToString(); } catch { return null; }
+        }
+
         static string Network(IPAddress ip, IPAddress mask)
         {
             var a = ip.GetAddressBytes();

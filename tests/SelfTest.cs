@@ -259,6 +259,22 @@ mtu_size = 1_350
             Eq((string)t["vpn_mode"], "selective", "toml: выборочный режим");
         }
 
+        // --- bound_if: адаптер для прямых соединений ---
+        {
+            var p = new Profile { Hostname = "h", Username = "u", Password = "p" };
+            p.Addresses.Add("1.2.3.4:443");
+            var t0 = TomlParser.Parse(ConfigBuilder.Build(p));
+            Check(!t0.ContainsKey("listener.tun.bound_if"), "bound_if: не пишется, если неизвестен");
+            var t1 = TomlParser.Parse(ConfigBuilder.Build(p, null, "16"));
+            Eq((string)t1["listener.tun.bound_if"], "16", "bound_if: автоопределённый адаптер");
+            p.BoundIf = "Wi-Fi";
+            var t2 = TomlParser.Parse(ConfigBuilder.Build(p, null, "16"));
+            Eq((string)t2["listener.tun.bound_if"], "Wi-Fi", "bound_if: ручная настройка важнее");
+            Eq(ConfigBuilder.FromToml(ConfigBuilder.Build(p)).BoundIf, "Wi-Fi", "bound_if: импорт из TOML");
+            p.ListenerType = "socks";
+            Check(!TomlParser.Parse(ConfigBuilder.Build(p, null, "16")).ContainsKey("listener.tun.bound_if"), "bound_if: не для SOCKS5");
+        }
+
         // --- ошибки ---
         {
             Throws(() => DeepLink.Decode("https://example.com"), "не tt://");

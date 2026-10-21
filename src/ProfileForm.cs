@@ -63,6 +63,7 @@ namespace TrustTunnelGui
         TextBox txtName, txtHost, txtSni, txtAddresses, txtUser, txtPass, txtCert, txtClientRandom, txtAuthKey;
         ComboBox cmbProtocol, cmbTls, cmbMode, cmbListener, cmbLog;
         CheckBox chkAntiDpi, chkIpv6, chkSkipVerify, chkShowPass, chkKill, chkSysDns, chkPq;
+        TextBox txtBoundIf;
         TextBox txtExclusions, txtKillPorts, txtDns, txtDevice, txtIncluded, txtExcluded, txtSocksAddr, txtSocksUser, txtSocksPass, txtExtra;
         NumericUpDown numMtu;
         Control[] tunControls, socksControls;
@@ -289,6 +290,11 @@ namespace TrustTunnelGui
 
             AddHeader(g, "TUN");
             var l1 = AddRow(g, "Имя адаптера", txtDevice = new TextBox(), "Как VPN-адаптер будет называться в Windows");
+            var phys = NetInfo.PhysicalInterface();
+            var l0 = AddRow(g, "Адаптер для прямых соединений", txtBoundIf = new TextBox(),
+                "Через него идёт всё, что мимо VPN. Пусто — определять автоматически" +
+                (phys != null ? " (сейчас: «" + phys.Name + "», индекс " + NetInfo.PhysicalInterfaceIndex() + ")" : "") +
+                ". Можно указать имя адаптера или его индекс из route print.");
             var l2 = AddRow(g, "MTU", numMtu = new NumericUpDown { Minimum = 0, Maximum = 9000, Width = Ui.S(110) }, "0 — по умолчанию (1350)");
             AddCheck(g, chkSysDns = new CheckBox { Text = "Менять системные DNS на время подключения" });
             var l3 = AddRow(g, "Через VPN", txtIncluded = Multi(2), "Сети в формате CIDR. Пусто — весь интернет (0.0.0.0/0 и 2000::/3)");
@@ -299,7 +305,7 @@ namespace TrustTunnelGui
             var l6 = AddRow(g, "Пользователь", txtSocksUser = new TextBox(), "Необязательно");
             var l7 = AddRow(g, "Пароль", txtSocksPass = new TextBox { UseSystemPasswordChar = true });
 
-            tunControls = new Control[] { l1, l2, l3, l4, txtDevice, numMtu, chkSysDns, txtIncluded, txtExcluded };
+            tunControls = new Control[] { l0, l1, l2, l3, l4, txtBoundIf, txtDevice, numMtu, chkSysDns, txtIncluded, txtExcluded };
             socksControls = new Control[] { l5, l6, l7, txtSocksAddr, txtSocksUser, txtSocksPass };
             return g;
         }
@@ -359,6 +365,7 @@ namespace TrustTunnelGui
 
             cmbListener.SelectedIndex = p.IsTun ? 0 : 1;
             txtDevice.Text = p.DeviceName;
+            txtBoundIf.Text = p.BoundIf ?? "";
             numMtu.Value = Math.Max(0, Math.Min(9000, p.MtuSize));
             chkSysDns.Checked = p.ChangeSystemDns;
             txtIncluded.Text = Join(p.IncludedRoutes);
@@ -400,6 +407,7 @@ namespace TrustTunnelGui
 
             p.ListenerType = cmbListener.SelectedIndex == 1 ? "socks" : "tun";
             p.DeviceName = txtDevice.Text.Trim();
+            p.BoundIf = txtBoundIf.Text.Trim();
             p.MtuSize = (int)numMtu.Value;
             p.ChangeSystemDns = chkSysDns.Checked;
             p.IncludedRoutes = Lines(txtIncluded);

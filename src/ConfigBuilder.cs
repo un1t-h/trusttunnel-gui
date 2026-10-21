@@ -24,8 +24,14 @@ namespace TrustTunnelGui
             return Build(p, null);
         }
 
-        /// <param name="homeSubnets">текущие домашние подсети — остаются напрямую в режиме «локальные сети через VPN»</param>
         public static string Build(Profile p, IEnumerable<string> homeSubnets)
+        {
+            return Build(p, homeSubnets, null);
+        }
+
+        /// <param name="homeSubnets">текущие домашние подсети — остаются напрямую в режиме «локальные сети через VPN»</param>
+        /// <param name="autoBoundIf">индекс физического адаптера для прямых соединений, если в профиле он не задан вручную</param>
+        public static string Build(Profile p, IEnumerable<string> homeSubnets, string autoBoundIf)
         {
             var sb = new StringBuilder();
             sb.Append("# Сгенерировано TrustTunnel GUI. Профиль: ").Append(p.DisplayName.Replace('\n', ' ')).Append('\n');
@@ -63,6 +69,10 @@ namespace TrustTunnelGui
                 // нет, клиент (по крайней мере v1.1.x) не ставит маршруты, и трафик идёт мимо туннеля.
                 sb.Append("\n[listener.tun]\n");
                 if (!string.IsNullOrEmpty(p.DeviceName)) Line(sb, "device_name", TomlWriter.Str(p.DeviceName));
+                // Явный адаптер для прямых соединений: без него клиент на Windows может не определить его сам,
+                // и всё, что идёт мимо VPN, перестаёт открываться (TrustTunnel/TrustTunnelClient#56).
+                string boundIf = !string.IsNullOrEmpty(p.BoundIf) ? p.BoundIf : autoBoundIf;
+                if (!string.IsNullOrEmpty(boundIf)) Line(sb, "bound_if", TomlWriter.Str(boundIf));
                 Line(sb, "included_routes", TomlWriter.Arr(p.IncludedRoutes.Count > 0 ? (IEnumerable<string>)p.IncludedRoutes : DefaultIncludedRoutes));
                 Line(sb, "excluded_routes", TomlWriter.Arr(LanRouting.ExcludedRoutes(p, homeSubnets)));
                 Line(sb, "mtu_size", (p.MtuSize > 0 ? p.MtuSize : 1350).ToString(CultureInfo.InvariantCulture));
@@ -157,6 +167,7 @@ namespace TrustTunnelGui
             {
                 p.ListenerType = "tun";
                 if (t.TryGetValue("listener.tun.device_name", out v2) && S(v2, "") != "") p.DeviceName = S(v2, "");
+                if (t.TryGetValue("listener.tun.bound_if", out v2)) p.BoundIf = S(v2, "");
                 if (t.TryGetValue("listener.tun.mtu_size", out v2) && v2 is long) p.MtuSize = (int)(long)v2;
                 if (t.TryGetValue("listener.tun.change_system_dns", out v2)) p.ChangeSystemDns = B(v2, true);
                 if (t.TryGetValue("listener.tun.included_routes", out v2)) p.IncludedRoutes = L(v2);

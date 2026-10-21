@@ -44,6 +44,7 @@ namespace TrustTunnelGui
         // Listener
         public string ListenerType { get; set; }
         public string DeviceName { get; set; }
+        public string BoundIf { get; set; }   // адаптер для прямых соединений; пусто — определять автоматически
         public int MtuSize { get; set; }
         public bool ChangeSystemDns { get; set; }
         public List<string> IncludedRoutes { get; set; }
@@ -95,6 +96,7 @@ namespace TrustTunnelGui
             KillSwitchAllowPorts = "";
             ListenerType = "tun";
             DeviceName = "TrustTunnel";
+            BoundIf = "";
             ChangeSystemDns = true;
             IncludedRoutes = new List<string>();
             ExcludedRoutes = new List<string>();
